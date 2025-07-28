@@ -30,9 +30,9 @@ if __name__ == "__main__":
     downsample_factor   = 8
     input_shape         = [512, 512]
     Init_Epoch          = 0
-    Freeze_Epoch        = 30
+    Freeze_Epoch        = 50
     Freeze_batch_size   = 8
-    UnFreeze_Epoch      = 60
+    UnFreeze_Epoch      = 100
     Unfreeze_batch_size = 4
     Freeze_Train        = True
     Init_lr             = 7e-3
