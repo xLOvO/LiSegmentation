@@ -1027,7 +1027,9 @@ class DeepLab(nn.Module):
         #   特征融合阶段
         # =============================#
         # 上采样深层特征 (匹配浅层尺寸)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)  # [B, 128, H/8, W/8]
+        # Align deep semantic features to the shallow feature map before fusion.
+        # This works for both output_stride=8 and output_stride=16.
+        x = F.interpolate(x, size=low_level_features.shape[2:], mode='bilinear', align_corners=True)
         # 特征融合 (整合浅层细节+深层语义)
         # 输出: [B, 128, H/8, W/8] → [B, 128, H/4, W/4]
         x = self.bdfm(x, low_level_features)
