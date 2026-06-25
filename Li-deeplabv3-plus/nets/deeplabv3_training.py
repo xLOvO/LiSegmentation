@@ -1,34 +1,42 @@
 import math
 from functools import partial
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 def CE_Loss(inputs, target, cls_weights, num_classes=21):
+    """Cross-entropy loss with ignore_index=num_classes for ignored pixels."""
     n, c, h, w = inputs.size()
     nt, ht, wt = target.size()
     if h != ht or w != wt:
         inputs = F.interpolate(inputs, size=(ht, wt), mode="bilinear", align_corners=True)
     temp_inputs = inputs.transpose(1, 2).transpose(2, 3).contiguous().view(-1, c)
     temp_target = target.view(-1)
-    CE_loss = nn.CrossEntropyLoss(weight=cls_weights, ignore_index=num_classes)(temp_inputs, temp_target)
-    return CE_loss
+    return nn.CrossEntropyLoss(weight=cls_weights, ignore_index=num_classes)(temp_inputs, temp_target)
+
 
 def Focal_Loss(inputs, target, cls_weights, num_classes=21, alpha=0.5, gamma=2):
+    """Focal loss for class-imbalanced segmentation tasks."""
     n, c, h, w = inputs.size()
     nt, ht, wt = target.size()
     if h != ht or w != wt:
         inputs = F.interpolate(inputs, size=(ht, wt), mode="bilinear", align_corners=True)
     temp_inputs = inputs.transpose(1, 2).transpose(2, 3).contiguous().view(-1, c)
     temp_target = target.view(-1)
-    logpt = -nn.CrossEntropyLoss(weight=cls_weights, ignore_index=num_classes, reduction='none')(temp_inputs,temp_target)
+    logpt = -nn.CrossEntropyLoss(
+        weight=cls_weights, ignore_index=num_classes, reduction="none"
+    )(temp_inputs, temp_target)
     pt = torch.exp(logpt)
     if alpha is not None:
         logpt *= alpha
-    loss = -((1 - pt)  ** gamma) * logpt
+    loss = -((1 - pt) ** gamma) * logpt
     return loss.mean()
 
+
 def Dice_loss(inputs, target, beta=1, smooth=1e-5):
+    """Dice loss on one-hot encoded segmentation targets."""
     n, c, h, w = inputs.size()
     nt, ht, wt, ct = target.size()
     if h != ht or w != wt:
@@ -41,30 +49,32 @@ def Dice_loss(inputs, target, beta=1, smooth=1e-5):
     score = ((1 + beta ** 2) * tp + smooth) / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp + smooth)
     return 1 - torch.mean(score)
 
-def weights_init(net, init_type='normal', init_gain=0.02):
+
+def weights_init(net, init_type="normal", init_gain=0.02):
+    """Initialize convolution and BatchNorm layers."""
     def init_func(m):
         classname = m.__class__.__name__
-        # 卷积层初始化
-        if hasattr(m, 'weight') and 'Conv' in classname:
-            if init_type == 'normal':
+        if hasattr(m, "weight") and "Conv" in classname:
+            if init_type == "normal":
                 nn.init.normal_(m.weight.data, 0.0, init_gain)
-            elif init_type == 'xavier':
+            elif init_type == "xavier":
                 nn.init.xavier_normal_(m.weight.data, gain=init_gain)
-            elif init_type == 'kaiming':
-                nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-            elif init_type == 'orthogonal':
+            elif init_type == "kaiming":
+                nn.init.kaiming_normal_(m.weight.data, a=0, mode="fan_in")
+            elif init_type == "orthogonal":
                 nn.init.orthogonal_(m.weight.data, gain=init_gain)
-        # BN层初始化
-        elif 'BatchNorm' in classname:
+        elif "BatchNorm" in classname:
             nn.init.normal_(m.weight.data, 1.0, 0.02)
             nn.init.constant_(m.bias.data, 0.0)
 
-    print(f'初始化方式: {init_type}')
+    print(f"Initialize network with {init_type}.")
     net.apply(init_func)
+
 
 def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters,
                      warmup_iters_ratio=0.1, warmup_lr_ratio=0.1,
                      no_aug_iter_ratio=0.3, step_num=10):
+    """Return a learning-rate scheduler function indexed by epoch."""
     def yolox_warm_cos_lr(lr, min_lr, total_iters, warmup_total_iters,
                           warmup_lr_start, no_aug_iter, iters):
         if iters <= warmup_total_iters:
@@ -84,17 +94,15 @@ def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters,
         warmup_total_iters = min(max(warmup_iters_ratio * total_iters, 1), 3)
         warmup_lr_start = max(warmup_lr_ratio * lr, 1e-6)
         no_aug_iter = min(max(no_aug_iter_ratio * total_iters, 1), 15)
-        func = partial(yolox_warm_cos_lr, lr, min_lr, total_iters,
+        return partial(yolox_warm_cos_lr, lr, min_lr, total_iters,
                        warmup_total_iters, warmup_lr_start, no_aug_iter)
-    else:
-        decay_rate = (min_lr / lr)  ** (1 / (step_num - 1))
-        step_size = total_iters // step_num
-        func = partial(step_lr, lr, decay_rate, step_size)
 
-    return func
+    decay_rate = (min_lr / lr) ** (1 / (step_num - 1))
+    step_size = total_iters // step_num
+    return partial(step_lr, lr, decay_rate, step_size)
 
 
 def set_optimizer_lr(optimizer, lr_scheduler_func, epoch):
     lr = lr_scheduler_func(epoch)
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        param_group["lr"] = lr
