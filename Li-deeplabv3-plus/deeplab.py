@@ -11,6 +11,12 @@ from nets.deeplabv3_plus import DeepLab
 from utils.utils import cvtColor, preprocess_input, resize_image, show_config
 
 class DeeplabV3(object):
+    """Inference wrapper for DeepLabV3+.
+
+    The class owns preprocessing, model loading, postprocessing, visualization,
+    FPS testing, ONNX export, and mIoU-mask generation.
+    """
+
     _defaults = {
         "model_path"        : 'logs/best_epoch_weights.pth',
         "num_classes"       : 4,
@@ -25,6 +31,10 @@ class DeeplabV3(object):
         self.__dict__.update(self._defaults)
         for name, value in kwargs.items():
             setattr(self, name, value)
+        self.cuda = self.cuda and torch.cuda.is_available()
+        if kwargs.get("cuda", self._defaults["cuda"]) and not self.cuda:
+            print("CUDA is not available. Inference will run on CPU.")
+
         if self.num_classes <= 21:
             self.colors = [ (0, 0, 0), (128, 0, 0), (0, 128, 0), (128, 128, 0), (0, 0, 128), (128, 0, 128), (0, 128, 128), 
                             (128, 128, 128), (64, 0, 0), (192, 0, 0), (64, 128, 0), (192, 128, 0), (64, 0, 128), (192, 0, 128), 
@@ -35,12 +45,19 @@ class DeeplabV3(object):
             self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
             self.colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), self.colors))
         self.generate()
-        show_config(**self._defaults)
+        show_config(**{**self._defaults, **kwargs, "cuda": self.cuda})
 
     def generate(self, onnx=False):
+        """Build the network and load trained weights."""
+        if not os.path.exists(self.model_path):
+            raise FileNotFoundError(
+                f"Model weights not found: {self.model_path}. "
+                "Train a model first or pass --model-path to predict.py."
+            )
+
         self.net = DeepLab(num_classes=self.num_classes, backbone=self.backbone, downsample_factor=self.downsample_factor, pretrained=False)
 
-        device      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device      = torch.device('cuda' if self.cuda else 'cpu')
         self.net.load_state_dict(torch.load(self.model_path, map_location=device))
         self.net    = self.net.eval()
         print('{} model, and classes loaded.'.format(self.model_path))
@@ -50,6 +67,7 @@ class DeeplabV3(object):
                 self.net = self.net.cuda()
 
     def detect_image(self, image, count=False, name_classes=None):
+        """Segment one PIL image and return the configured visualization result."""
         image       = cvtColor(image)
         old_img     = copy.deepcopy(image)
         orininal_h  = np.array(image).shape[0]
@@ -60,6 +78,7 @@ class DeeplabV3(object):
             images = torch.from_numpy(image_data)
             if self.cuda:
                 images = images.cuda()
+            # pr: [H, W, num_classes], then crop away gray padding and restore original size.
             pr = self.net(images)[0]
             pr = F.softmax(pr.permute(1,2,0),dim = -1).cpu().numpy()
             pr = pr[int((self.input_shape[0] - nh) // 2) : int((self.input_shape[0] - nh) // 2 + nh), \
@@ -93,6 +112,7 @@ class DeeplabV3(object):
         return image
 
     def get_FPS(self, image, test_interval):
+        """Return average inference time for one image."""
         image       = cvtColor(image)
         image_data, nw, nh  = resize_image(image, (self.input_shape[1],self.input_shape[0]))
         image_data  = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, np.float32)), (2, 0, 1)), 0)
@@ -116,6 +136,7 @@ class DeeplabV3(object):
         return tact_time
 
     def convert_to_onnx(self, simplify, model_path):
+        """Export the model to ONNX. Requires onnx and optionally onnxsim."""
         import onnx
         self.generate(onnx=True)
         im                  = torch.zeros(1, 3, *self.input_shape).to('cpu')
@@ -146,6 +167,7 @@ class DeeplabV3(object):
         print('Onnx model save as {}'.format(model_path))
     
     def get_miou_png(self, image):
+        """Return a single-channel class-index mask for mIoU evaluation."""
         image       = cvtColor(image)
         orininal_h  = np.array(image).shape[0]
         orininal_w  = np.array(image).shape[1]
